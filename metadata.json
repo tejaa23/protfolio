@@ -1,0 +1,8 @@
+{
+  "name": "Invitation Video Portfolio",
+  "description": "An elegant, interactive showcase platform for invitation video creators. Built with high-fidelity video play support, category filters, responsive video ratio adapters, client inquiries, and a creator workspace dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
