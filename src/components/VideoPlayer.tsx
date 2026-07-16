@@ -9,6 +9,7 @@ interface VideoPlayerProps {
   controls?: boolean;
   className?: string;
   poster?: string;
+  objectFit?: "cover" | "contain";
 }
 
 export function parseVideoUrl(url: string): {
@@ -60,7 +61,8 @@ export default function VideoPlayer({
   loop = true,
   controls = true,
   className = "",
-  poster = ""
+  poster = "",
+  objectFit = "cover"
 }: VideoPlayerProps) {
   const parsed = parseVideoUrl(url);
   const [playerType, setPlayerType] = useState(parsed.type);
@@ -129,8 +131,9 @@ export default function VideoPlayer({
   }
 
   if (playerType === "youtube" || playerType === "vimeo" || playerType === "drive") {
+    const hasAspectOrHeight = className.includes("aspect-") || className.includes("h-");
     return (
-      <div className={`relative overflow-hidden rounded-xl bg-black aspect-video ${className}`}>
+      <div className={`relative overflow-hidden rounded-xl bg-black ${hasAspectOrHeight ? "" : "aspect-video"} ${className}`}>
         <iframe
           src={playerSrc}
           title="Invitation Video Player"
@@ -157,7 +160,7 @@ export default function VideoPlayer({
         onError={handleVideoError}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        className="w-full h-full object-cover cursor-pointer"
+        className={`w-full h-full cursor-pointer ${objectFit === "cover" ? "object-cover" : "object-contain"}`}
       />
 
       {/* Custom Control Overlay */}

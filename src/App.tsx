@@ -20,6 +20,7 @@ import {
   TrendingUp, 
   Tv, 
   Settings, 
+  ExternalLink,
   MessageSquare, 
   Send,
   PlusCircle,
@@ -1435,7 +1436,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
 
                 <div className="flex-grow flex items-center justify-center">
                   {/* Aspect Ratio Box Wrapper for Player */}
-                  <div className={`w-full ${selectedTemplate.ratio === "9:16" ? "max-w-[310px] aspect-[9/16]" : "aspect-video"} rounded-xl overflow-hidden shadow-2xl relative`}>
+                  <div className={`w-full ${selectedTemplate.ratio === "9:16" ? "max-w-[310px] aspect-[9/16]" : "aspect-video"} rounded-xl overflow-hidden shadow-2xl relative bg-zinc-950`}>
                     {selectedTemplate.category === "Banners" || selectedTemplate.category === "photos" ? (
                       <img 
                         src={getImageUrl(selectedTemplate.videoUrl)} 
@@ -1456,15 +1457,29 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                         muted={false}
                         controls={true}
                         loop={true}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain bg-zinc-950"
+                        objectFit="contain"
                       />
                     )}
                   </div>
                 </div>
 
-                {/* Vertical format hint overlay */}
-                <div className="text-center mt-3 text-zinc-500 text-[10px] font-mono tracking-wide hidden md:block">
-                  {selectedTemplate.ratio === "9:16" ? "✦ Mobile portrait format (Perfect for smartphone screens) ✦" : "✦ Widescreen cinematic format (Perfect for emails & web players) ✦"}
+                {/* Vertical format hint overlay and HD Link */}
+                <div className="text-center mt-3 space-y-2">
+                  <div className="text-zinc-500 text-[10px] font-mono tracking-wide hidden md:block">
+                    {selectedTemplate.ratio === "9:16" ? "✦ Mobile portrait format (Perfect for smartphone screens) ✦" : "✦ Widescreen cinematic format (Perfect for emails & web players) ✦"}
+                  </div>
+                  {!(selectedTemplate.category === "Banners" || selectedTemplate.category === "photos") && (
+                    <a
+                      href={selectedTemplate.videoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-350 transition font-medium hover:underline bg-violet-500/10 border border-violet-500/20 px-3 py-1.5 rounded-full"
+                    >
+                      <ExternalLink size={12} />
+                      <span>Watch in Original Ultra-HD Quality</span>
+                    </a>
+                  )}
                 </div>
               </div>
 
