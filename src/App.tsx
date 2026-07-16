@@ -166,6 +166,19 @@ export default function App() {
           }
         });
 
+        // Clean up any old default templates that have been deleted from INITIAL_TEMPLATES in the code
+        const initialTemplateIds = INITIAL_TEMPLATES.map(t => t.id);
+        const beforePruneCount = parsed.length;
+        parsed = parsed.filter(t => {
+          if (t.id.startsWith("custom-")) {
+            return true; // Keep user-generated custom templates
+          }
+          return initialTemplateIds.includes(t.id); // Keep built-in templates only if they still exist in INITIAL_TEMPLATES
+        });
+        if (parsed.length !== beforePruneCount) {
+          migrated = true;
+        }
+
         // Auto-migrate each template to make sure it has the `categories` field
         parsed = parsed.map(t => {
           if (!t.categories) {
