@@ -25,12 +25,36 @@ import {
   PlusCircle,
   Video,
   FileText,
-  Pencil
+  Pencil,
+  Image as ImageIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { VideoTemplate, Inquiry, CATEGORIES } from "./types";
 import { INITIAL_TEMPLATES } from "./data";
 import VideoPlayer from "./components/VideoPlayer";
+
+// Helper to convert Google Drive sharing links into direct high-speed thumbnail/image embed links
+const getImageUrl = (url: string) => {
+  if (!url) return "";
+  const driveRegex = /(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/file\/d\/)([^/?#&\s]+)/;
+  const match = url.match(driveRegex);
+  if (match && match[1]) {
+    // /thumbnail?id=...&sz=w1600 is highly optimized, bypasses anti-bot virus checking screens, and handles parallel requests beautifully
+    return `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1600`;
+  }
+  return url;
+};
+
+// Backup URL for Google Drive files if the primary thumbnail endpoint hits any issue
+const getBackupImageUrl = (url: string) => {
+  if (!url) return "";
+  const driveRegex = /(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/file\/d\/)([^/?#&\s]+)/;
+  const match = url.match(driveRegex);
+  if (match && match[1]) {
+    return `https://lh3.googleusercontent.com/d/${match[1]}`;
+  }
+  return url;
+};
 
 export default function App() {
   // --- STATE ---
@@ -65,7 +89,8 @@ export default function App() {
 
   // New Template creation state (for Creator Workspace)
   const [newTitle, setNewTitle] = useState("");
-  const [newCategory, setNewCategory] = useState("Wedding");
+  const [newCategory, setNewCategory] = useState("Wedding Invitations");
+  const [newCategories, setNewCategories] = useState<string[]>(["Wedding Invitations"]);
   const [newVideoUrl, setNewVideoUrl] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newDuration, setNewDuration] = useState("30s");
@@ -77,9 +102,30 @@ export default function App() {
   const [newPhotoSlides, setNewPhotoSlides] = useState(3);
   const [newTurnaround, setNewTurnaround] = useState("2 Business Days");
   const [newColorPalette, setNewColorPalette] = useState("#D4AF37,#0C2340,#FFFFFF");
+  const [newDetailsNeeded, setNewDetailsNeeded] = useState("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
   const [creatorError, setCreatorError] = useState("");
   const [creatorSuccess, setCreatorSuccess] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<VideoTemplate | null>(null);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
+
+  const [templateToDeleteId, setTemplateToDeleteId] = useState<string | null>(null);
+  const [inquiryToDeleteId, setInquiryToDeleteId] = useState<string | null>(null);
+
+  const [clientCustomDetails, setClientCustomDetails] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (selectedTemplate) {
+      const initial: Record<string, string> = {};
+      const fields = selectedTemplate.specs.detailsNeeded || [];
+      fields.forEach(field => {
+        initial[field] = "";
+      });
+      setClientCustomDetails(initial);
+    } else {
+      setClientCustomDetails({});
+    }
+  }, [selectedTemplate]);
 
   // --- INITIALIZATION & LOCALSTORAGE ---
   useEffect(() => {
@@ -87,15 +133,49 @@ export default function App() {
     if (storedTemplates) {
       try {
         let parsed = JSON.parse(storedTemplates) as VideoTemplate[];
-        // Auto-migrate to remove the old royal gold template and add the new teja-elegant template
-        const hasRoyalGold = parsed.some(t => t.id === "wedding-royal-gold");
-        if (hasRoyalGold) {
-          parsed = parsed.filter(t => t.id !== "wedding-royal-gold");
-          const hasTejaElegant = parsed.some(t => t.id === "wedding-teja-elegant");
-          if (!hasTejaElegant) {
-            const newTejaTemplate = INITIAL_TEMPLATES.find(t => t.id === "wedding-teja-elegant") || INITIAL_TEMPLATES[0];
-            parsed.unshift(newTejaTemplate);
+        
+        // Migrate and clean default videos (keeping only wedding-teja-elegant among videos)
+        let migrated = false;
+        
+        // Remove all other original default videos
+        const initialVideoIds = [
+          "wedding-garden-watercolor",
+          "birthday-neon-sparks",
+          "birthday-kids-safari",
+          "saree-traditional-silk",
+          "cradle-sweet-arrival",
+          "ai-wedding-avatar",
+          "voiceover-grand-story",
+          "special-ai-multiverse",
+          "other-diwali-lights",
+          "anniversary-candlelight"
+        ];
+        
+        const hasOtherDefaultVideos = parsed.some(t => initialVideoIds.includes(t.id));
+        if (hasOtherDefaultVideos) {
+          parsed = parsed.filter(t => !initialVideoIds.includes(t.id));
+          migrated = true;
+        }
+
+        // Ensure all default templates from INITIAL_TEMPLATES are present in local storage list
+        INITIAL_TEMPLATES.forEach(initialT => {
+          const hasTemplate = parsed.some(t => t.id === initialT.id);
+          if (!hasTemplate) {
+            parsed.push(initialT);
+            migrated = true;
           }
+        });
+
+        // Auto-migrate each template to make sure it has the `categories` field
+        parsed = parsed.map(t => {
+          if (!t.categories) {
+            t.categories = [t.category];
+            migrated = true;
+          }
+          return t;
+        });
+
+        if (migrated) {
           localStorage.setItem("invitation_templates", JSON.stringify(parsed));
         }
         setTemplates(parsed);
@@ -137,6 +217,7 @@ export default function App() {
     setEditingTemplate(template);
     setNewTitle(template.title);
     setNewCategory(template.category);
+    setNewCategories(template.categories || [template.category]);
     setNewVideoUrl(template.videoUrl);
     setNewDescription(template.description);
     setNewDuration(template.duration);
@@ -148,6 +229,7 @@ export default function App() {
     setNewPhotoSlides(template.specs.photoSlides);
     setNewTurnaround(template.specs.turnaround);
     setNewColorPalette(template.specs.colorPalette.join(","));
+    setNewDetailsNeeded((template.specs.detailsNeeded || []).join(", "));
     setCreatorError("");
     setCreatorSuccess("");
 
@@ -161,7 +243,8 @@ export default function App() {
   const handleCancelEdit = () => {
     setEditingTemplate(null);
     setNewTitle("");
-    setNewCategory("Wedding");
+    setNewCategory("Wedding Invitations");
+    setNewCategories(["Wedding Invitations"]);
     setNewVideoUrl("");
     setNewDescription("");
     setNewDuration("30s");
@@ -173,8 +256,31 @@ export default function App() {
     setNewPhotoSlides(3);
     setNewTurnaround("2 Business Days");
     setNewColorPalette("#D4AF37,#0C2340,#FFFFFF");
+    setNewDetailsNeeded("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
     setCreatorError("");
     setCreatorSuccess("");
+  };
+
+  const handleCopyExportCode = () => {
+    const dataTsCode = `import { VideoTemplate } from "./types";
+
+export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, null, 2)};
+`;
+    navigator.clipboard.writeText(dataTsCode)
+      .then(() => {
+        setCopiedCode(true);
+        setTimeout(() => setCopiedCode(false), 2500);
+      })
+      .catch(() => {
+        // Fallback if clipboard API fails
+        const textarea = document.getElementById("export-code-textarea") as HTMLTextAreaElement;
+        if (textarea) {
+          textarea.select();
+          document.execCommand("copy");
+          setCopiedCode(true);
+          setTimeout(() => setCopiedCode(false), 2500);
+        }
+      });
   };
 
   const handleAddTemplate = (e: FormEvent) => {
@@ -187,22 +293,31 @@ export default function App() {
       return;
     }
 
+    if (newCategories.length === 0) {
+      setCreatorError("Please select at least one category.");
+      return;
+    }
+
+    const isVideo = !newCategories.includes("Banners") && !newCategories.includes("photos");
+
     const templateData: VideoTemplate = {
       id: editingTemplate ? editingTemplate.id : "custom-" + Date.now(),
       title: newTitle.trim(),
-      category: newCategory,
+      category: newCategories[0] || "other",
+      categories: newCategories,
       videoUrl: newVideoUrl.trim(),
       description: newDescription.trim(),
       duration: newDuration,
       ratio: newRatio,
-      priceTier: newPriceTier,
+      priceTier: isVideo ? "Standard" : newPriceTier,
       tags: newTags.split(",").map(t => t.trim()).filter(Boolean),
       specs: {
         resolution: newResolution,
-        musicStyle: newMusicStyle,
+        musicStyle: isVideo ? "" : newMusicStyle,
         photoSlides: Number(newPhotoSlides) || 0,
         turnaround: newTurnaround,
-        colorPalette: newColorPalette.split(",").map(c => c.trim()).filter(Boolean)
+        colorPalette: isVideo ? [] : newColorPalette.split(",").map(c => c.trim()).filter(Boolean),
+        detailsNeeded: newDetailsNeeded.split(",").map(d => d.trim()).filter(Boolean)
       }
     };
 
@@ -220,7 +335,8 @@ export default function App() {
     // Reset Form
     setEditingTemplate(null);
     setNewTitle("");
-    setNewCategory("Wedding");
+    setNewCategory("Wedding Invitations");
+    setNewCategories(["Wedding Invitations"]);
     setNewVideoUrl("");
     setNewDescription("");
     setNewDuration("30s");
@@ -232,16 +348,22 @@ export default function App() {
     setNewPhotoSlides(3);
     setNewTurnaround("2 Business Days");
     setNewColorPalette("#D4AF37,#0C2340,#FFFFFF");
+    setNewDetailsNeeded("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
   };
 
   const handleDeleteTemplate = (id: string, e: MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm("Are you sure you want to delete this template from your portfolio?")) {
-      const updated = templates.filter(t => t.id !== id);
+    setTemplateToDeleteId(id);
+  };
+
+  const confirmDeleteTemplate = () => {
+    if (templateToDeleteId) {
+      const updated = templates.filter(t => t.id !== templateToDeleteId);
       saveTemplates(updated);
-      if (editingTemplate?.id === id) {
+      if (editingTemplate?.id === templateToDeleteId) {
         handleCancelEdit();
       }
+      setTemplateToDeleteId(null);
     }
   };
 
@@ -302,9 +424,14 @@ export default function App() {
   };
 
   const handleDeleteInquiry = (id: string) => {
-    if (window.confirm("Delete this inquiry log?")) {
-      const updated = inquiries.filter(inq => inq.id !== id);
+    setInquiryToDeleteId(id);
+  };
+
+  const confirmDeleteInquiry = () => {
+    if (inquiryToDeleteId) {
+      const updated = inquiries.filter(inq => inq.id !== inquiryToDeleteId);
       saveInquiries(updated);
+      setInquiryToDeleteId(null);
     }
   };
 
@@ -324,24 +451,38 @@ export default function App() {
   const handleChangePasscode = (e: FormEvent) => {
     e.preventDefault();
     if (!newKeyInput.trim()) {
-      alert("Passcode cannot be empty!");
+      setCreatorError("Passcode cannot be empty!");
       return;
     }
     localStorage.setItem("creator_workspace_key", newKeyInput.trim());
     setWorkspaceKey(newKeyInput.trim());
     setNewKeyInput("");
     setIsChangingKey(false);
-    alert("Creator Workspace Access Key successfully updated!");
+    setCreatorSuccess("Creator Workspace Access Key successfully updated!");
   };
 
   // --- FILTERED TEMPLATES ---
   const filteredTemplates = templates.filter(t => {
-    const matchesCategory = selectedCategory === "All" || t.category === selectedCategory;
+    let matchesCategory = false;
+    const templateCategories = t.categories || [t.category];
+    
+    if (selectedCategory === "All") {
+      matchesCategory = true;
+    } else if (selectedCategory === "All AI Invitations") {
+      matchesCategory = templateCategories.some(cat => [
+        "AI Wedding Invitations",
+        "Wedding Voiceover Invitations",
+        "Special AI",
+        "other"
+      ].includes(cat));
+    } else {
+      matchesCategory = templateCategories.includes(selectedCategory);
+    }
     const searchLower = searchQuery.toLowerCase().trim();
     const matchesSearch = !searchLower || 
       t.title.toLowerCase().includes(searchLower) ||
       t.description.toLowerCase().includes(searchLower) ||
-      t.category.toLowerCase().includes(searchLower) ||
+      templateCategories.some(cat => cat.toLowerCase().includes(searchLower)) ||
       t.tags.some(tag => tag.toLowerCase().includes(searchLower));
     
     return matchesCategory && matchesSearch;
@@ -413,39 +554,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* HERO SECTION */}
-      <section className="relative overflow-hidden bg-gradient-to-b from-violet-950/20 to-transparent py-12 sm:py-16 border-b border-zinc-850">
-        {/* Violet ambient light sphere in background */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[150px] bg-violet-500/10 rounded-full blur-[100px] pointer-events-none" />
 
-        <div className="max-w-4xl mx-auto text-center px-4 relative z-10">
-          <div className="inline-flex items-center gap-1.5 bg-violet-500/10 border border-violet-500/20 text-violet-300 text-xs font-semibold px-3 py-1 rounded-full mb-4">
-            <Sparkles size={12} className="text-violet-400" />
-            <span>Premium Motion Invitations & Video Art</span>
-          </div>
-          <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white leading-tight mb-4 animate-fade-in">
-            Bring Your Celebrations to Life with Custom Motion Invites
-          </h2>
-          <p className="text-zinc-400 text-sm sm:text-base md:text-lg max-w-2xl mx-auto leading-relaxed">
-            I craft cinematic, stunning invitation templates optimized for WhatsApp, Reels, email, and social media. Explore my live work below, view the design features, and let's craft the perfect visual card for your milestone.
-          </p>
 
-          <div className="flex flex-wrap justify-center gap-6 mt-8 text-xs text-zinc-500 font-medium">
-            <div className="flex items-center gap-1">
-              <CheckCircle size={14} className="text-violet-500" />
-              <span>9:16 Vertical & 16:9 Widescreen</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <CheckCircle size={14} className="text-violet-500" />
-              <span>Custom Soundtracks & Photo Slides</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <CheckCircle size={14} className="text-violet-500" />
-              <span>Full High-Definition Delivery</span>
-            </div>
-          </div>
-        </div>
-      </section>
 
       {/* MAIN LAYOUT CONTAINER */}
       <main className="flex-grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
@@ -485,6 +595,14 @@ export default function App() {
                 >
                   <Settings size={12} className={isChangingKey ? "animate-spin" : ""} />
                   <span>Key Settings</span>
+                </button>
+                <button
+                  onClick={() => setIsExportModalOpen(true)}
+                  className="px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/30 text-[11px] font-bold cursor-pointer transition flex items-center gap-1"
+                  title="Export template database code to make changes live for all visitors"
+                >
+                  <Send size={12} />
+                  <span>Sync/Export Live Code</span>
                 </button>
               </div>
             </div>
@@ -557,31 +675,44 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Category *</label>
-                      <select
-                        value={newCategory}
-                        onChange={(e) => setNewCategory(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-violet-500"
-                      >
-                        {CATEGORIES.filter(c => c !== "All").map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Format *</label>
-                      <select
-                        value={newRatio}
-                        onChange={(e) => setNewRatio(e.target.value as "9:16" | "16:9")}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-violet-500"
-                      >
-                        <option value="9:16">Vertical (9:16)</option>
-                        <option value="16:9">Widescreen (16:9)</option>
-                      </select>
+                  <div>
+                    <label className="block text-zinc-300 font-semibold mb-1.5">Categories (Select all that apply) *</label>
+                    <div className="grid grid-cols-2 gap-2 bg-zinc-900/60 p-3 rounded-lg border border-zinc-800">
+                      {CATEGORIES.filter(c => c !== "All" && c !== "All AI Invitations").map(cat => {
+                        const isChecked = newCategories.includes(cat);
+                        return (
+                          <label key={cat} className="flex items-center gap-2 text-zinc-300 hover:text-white text-xs cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setNewCategories([...newCategories, cat]);
+                                } else {
+                                  setNewCategories(newCategories.filter(c => c !== cat));
+                                }
+                              }}
+                              className="rounded border-zinc-700 bg-zinc-950 text-violet-500 focus:ring-violet-500 h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <span>{cat}</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
+
+                  <div>
+                    <label className="block text-zinc-300 font-semibold mb-1">Format *</label>
+                    <select
+                      value={newRatio}
+                      onChange={(e) => setNewRatio(e.target.value as "9:16" | "16:9")}
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-violet-500"
+                    >
+                      <option value="9:16">Vertical (9:16)</option>
+                      <option value="16:9">Widescreen (16:9)</option>
+                    </select>
+                  </div>
+                </div>
 
                   <div>
                     <label className="block text-zinc-300 font-semibold mb-1">Video URL (Direct MP4, YouTube, Vimeo, or Google Drive) *</label>
@@ -606,85 +737,108 @@ export default function App() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Duration</label>
-                      <input
-                        type="text"
-                        placeholder="30s"
-                        value={newDuration}
-                        onChange={(e) => setNewDuration(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Price Tier</label>
-                      <select
-                        value={newPriceTier}
-                        onChange={(e) => setNewPriceTier(e.target.value as "Standard" | "Premium" | "Signature")}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      >
-                        <option value="Standard">Standard</option>
-                        <option value="Premium">Premium</option>
-                        <option value="Signature">Signature</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Photos Slots</label>
-                      <input
-                        type="number"
-                        placeholder="3"
-                        value={newPhotoSlides}
-                        onChange={(e) => setNewPhotoSlides(Number(e.target.value))}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                  </div>
+                  {(() => {
+                    const formIsVideo = !newCategories.includes("Banners") && !newCategories.includes("photos");
+                    return (
+                      <>
+                        <div className={`grid ${formIsVideo ? "grid-cols-2" : "grid-cols-3"} gap-2`}>
+                          <div>
+                            <label className="block text-zinc-300 font-semibold mb-1">Duration</label>
+                            <input
+                              type="text"
+                              placeholder="30s"
+                              value={newDuration}
+                              onChange={(e) => setNewDuration(e.target.value)}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                            />
+                          </div>
+                          {!formIsVideo && (
+                            <div>
+                              <label className="block text-zinc-300 font-semibold mb-1">Price Tier</label>
+                              <select
+                                value={newPriceTier}
+                                onChange={(e) => setNewPriceTier(e.target.value as "Standard" | "Premium" | "Signature")}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                              >
+                                <option value="Standard">Standard</option>
+                                <option value="Premium">Premium</option>
+                                <option value="Signature">Signature</option>
+                              </select>
+                            </div>
+                          )}
+                          <div>
+                            <label className="block text-zinc-300 font-semibold mb-1">Photos Slots</label>
+                            <input
+                              type="number"
+                              placeholder="3"
+                              value={newPhotoSlides}
+                              onChange={(e) => setNewPhotoSlides(Number(e.target.value))}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                            />
+                          </div>
+                        </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Resolution Specs</label>
-                      <input
-                        type="text"
-                        placeholder="1080x1920 (Vertical)"
-                        value={newResolution}
-                        onChange={(e) => setNewResolution(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Turnaround Time</label>
-                      <input
-                        type="text"
-                        placeholder="2 Business Days"
-                        value={newTurnaround}
-                        onChange={(e) => setNewTurnaround(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                  </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-zinc-300 font-semibold mb-1">Resolution Specs</label>
+                            <input
+                              type="text"
+                              placeholder="1080x1920 (Vertical)"
+                              value={newResolution}
+                              onChange={(e) => setNewResolution(e.target.value)}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-zinc-300 font-semibold mb-1">Turnaround Time</label>
+                            <input
+                              type="text"
+                              placeholder="2 Business Days"
+                              value={newTurnaround}
+                              onChange={(e) => setNewTurnaround(e.target.value)}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                            />
+                          </div>
+                        </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Music Vibe / Genre</label>
-                      <input
-                        type="text"
-                        placeholder="Classical Cinematic Violin"
-                        value={newMusicStyle}
-                        onChange={(e) => setNewMusicStyle(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-zinc-300 font-semibold mb-1">Color Palette (Hex-csv)</label>
-                      <input
-                        type="text"
-                        placeholder="#D4AF37,#0C2340,#FFFFFF"
-                        value={newColorPalette}
-                        onChange={(e) => setNewColorPalette(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white font-mono focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
+                        {!formIsVideo && (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-zinc-300 font-semibold mb-1">Music Vibe / Genre</label>
+                              <input
+                                type="text"
+                                placeholder="Classical Cinematic Violin"
+                                value={newMusicStyle}
+                                onChange={(e) => setNewMusicStyle(e.target.value)}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-zinc-300 font-semibold mb-1">Color Palette (Hex-csv)</label>
+                              <input
+                                type="text"
+                                placeholder="#D4AF37,#0C2340,#FFFFFF"
+                                value={newColorPalette}
+                                onChange={(e) => setNewColorPalette(e.target.value)}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white font-mono focus:outline-none focus:border-violet-500"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                  <div>
+                    <label className="block text-zinc-300 font-semibold mb-1">Required Client Text Details (Comma-separated) *</label>
+                    <input
+                      type="text"
+                      placeholder="Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address"
+                      value={newDetailsNeeded}
+                      onChange={(e) => setNewDetailsNeeded(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-white focus:outline-none focus:border-violet-500"
+                    />
+                    <p className="text-[10px] text-zinc-500 mt-1">Specify which custom text inputs the customer must provide when ordering (e.g. Names, Date, Venue, Age).</p>
                   </div>
 
                   <div>
@@ -819,44 +973,137 @@ export default function App() {
         )}
 
         {/* PORTFOLIO CATALOG FILTER BAR & SEARCH */}
-        <div className="glass rounded-2xl p-4 sm:p-5 mb-8 flex flex-col md:flex-row justify-between items-center gap-4 border border-zinc-800/85">
-          {/* Category Tabs */}
-          <div className="flex flex-wrap gap-1.5 w-full md:w-auto overflow-x-auto justify-start pb-2 md:pb-0 scrollbar-none">
-            {CATEGORIES.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-4 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all duration-300 cursor-pointer ${
-                  selectedCategory === cat
-                    ? "accent-gradient text-white shadow-lg shadow-violet-500/25"
-                    : "bg-zinc-900/60 hover:bg-zinc-800/80 text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
+        <div className="glass rounded-2xl p-5 mb-8 border border-zinc-800/85">
+          <div className="flex flex-col gap-5">
+            {/* Search and General Status row */}
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-zinc-900 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
+                  <Film size={15} className="text-violet-400" />
+                  Portfolio Gallery
+                </h3>
+                <p className="text-[10px] text-zinc-500 mt-0.5">Explore our premium video invites, voiceover creations, banners, and digital cards.</p>
+              </div>
+              
+              {/* Search Box */}
+              <div className="relative w-full lg:w-80">
+                <span className="absolute inset-y-0 left-3 flex items-center text-zinc-400">
+                  <Search size={16} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search wedding, birthday, banners..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-zinc-900/60 hover:bg-zinc-800/50 focus:bg-zinc-900 border border-zinc-850 focus:border-violet-500 rounded-xl py-2.5 pl-10 pr-4 text-xs font-medium text-zinc-200 placeholder:text-zinc-500 transition-all outline-none"
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery("")}
+                    className="absolute inset-y-0 right-3 flex items-center text-zinc-400 hover:text-zinc-200"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
 
-          {/* Search Box */}
-          <div className="relative w-full md:w-80">
-            <span className="absolute inset-y-0 left-3 flex items-center text-zinc-400">
-              <Search size={16} />
-            </span>
-            <input
-              type="text"
-              placeholder="Search wedding, birthday, floral..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-zinc-900/60 hover:bg-zinc-800/50 focus:bg-zinc-900 border border-zinc-850 focus:border-violet-500 rounded-xl py-2.5 pl-10 pr-4 text-xs font-medium text-zinc-200 placeholder:text-zinc-500 transition-all outline-none"
-            />
-            {searchQuery && (
-              <button 
-                onClick={() => setSearchQuery("")}
-                className="absolute inset-y-0 right-3 flex items-center text-zinc-400 hover:text-zinc-200"
-              >
-                <X size={14} />
-              </button>
-            )}
+            {/* Categorized Filter Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+              {/* Reset/All filter button */}
+              <div className="md:col-span-12 flex flex-wrap gap-2 items-center">
+                <button
+                  onClick={() => setSelectedCategory("All")}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold tracking-wide transition-all duration-300 cursor-pointer ${
+                    selectedCategory === "All"
+                      ? "accent-gradient text-white shadow-lg shadow-violet-500/25"
+                      : "bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 border border-zinc-800/60"
+                  }`}
+                >
+                  ✨ View All Designs
+                </button>
+              </div>
+
+              {/* Group 1: VIDEO INVITATIONS */}
+              <div className="md:col-span-4 bg-zinc-900/30 p-3 rounded-xl border border-zinc-800/40">
+                <h4 className="text-[10px] font-bold text-violet-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <Tv size={10} /> Video Invitations
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Wedding Invitations",
+                    "Birthday Invitations",
+                    "saree ceremony invitation",
+                    "cradle ceremony invitation"
+                  ].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat as any)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 cursor-pointer ${
+                        selectedCategory === cat
+                          ? "bg-violet-600 text-white shadow-sm font-semibold"
+                          : "bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-850"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 2: AI INCLUDED */}
+              <div className="md:col-span-5 bg-zinc-900/30 p-3 rounded-xl border border-zinc-800/40">
+                <h4 className="text-[10px] font-bold text-fuchsia-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <Sparkles size={10} /> AI Included
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "All AI Invitations",
+                    "AI Wedding Invitations",
+                    "Wedding Voiceover Invitations",
+                    "Special AI",
+                    "other"
+                  ].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat as any)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 cursor-pointer ${
+                        selectedCategory === cat
+                          ? "bg-fuchsia-600 text-white shadow-sm font-semibold"
+                          : "bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-850"
+                      }`}
+                    >
+                      {cat === "All AI Invitations" ? "✨ All AI" : cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group 3: IMAGES */}
+              <div className="md:col-span-3 bg-zinc-900/30 p-3 rounded-xl border border-zinc-800/40">
+                <h4 className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <ImageIcon size={10} /> IMAGES (Prints & Cards)
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Banners",
+                    "photos"
+                  ].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat as any)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 cursor-pointer ${
+                        selectedCategory === cat
+                          ? "bg-teal-600 text-white shadow-sm font-semibold"
+                          : "bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-850"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -897,14 +1144,29 @@ export default function App() {
                     
                     {/* Media representation */}
                     <div className="absolute inset-0 w-full h-full opacity-80 transition-all duration-500 group-hover:opacity-100 group-hover:scale-105">
-                      <VideoPlayer 
-                        url={template.videoUrl} 
-                        autoplay={false}
-                        muted={true}
-                        controls={false}
-                        loop={true}
-                        className="w-full h-full object-cover"
-                      />
+                      {template.category === "Banners" || template.category === "photos" ? (
+                        <img 
+                          src={getImageUrl(template.videoUrl)} 
+                          alt={template.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            const backup = getBackupImageUrl(template.videoUrl);
+                            if (backup && e.currentTarget.src !== backup) {
+                              e.currentTarget.src = backup;
+                            }
+                          }}
+                        />
+                      ) : (
+                        <VideoPlayer 
+                          url={template.videoUrl} 
+                          autoplay={false}
+                          muted={true}
+                          controls={false}
+                          loop={true}
+                          className="w-full h-full object-cover"
+                        />
+                      )}
                     </div>
 
                     {/* Dark gradient shadow inside card */}
@@ -926,14 +1188,6 @@ export default function App() {
                       <Clock size={10} className="text-violet-400" />
                       <span>{template.duration}</span>
                     </div>
-
-                    {/* Click To Expand Floating Prompt */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-zinc-950/40 backdrop-blur-[2px] transition-all duration-300 z-20">
-                      <div className="accent-gradient hover:opacity-95 text-white text-xs font-bold px-4 py-2.5 rounded-full flex items-center gap-1.5 shadow-lg transform translate-y-3 group-hover:translate-y-0 transition-all">
-                        <Maximize2 size={13} />
-                        <span>Theater Play & Details</span>
-                      </div>
-                    </div>
                   </div>
 
                   {/* Card Info Details */}
@@ -944,15 +1198,17 @@ export default function App() {
                           {template.title}
                         </h4>
                         
-                        <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded border uppercase ${
-                          template.priceTier === "Signature" 
-                            ? "bg-violet-500/10 text-violet-400 border-violet-500/30" 
-                            : template.priceTier === "Premium" 
-                            ? "bg-zinc-800 text-zinc-350 border-zinc-750"
-                            : "bg-zinc-900 text-zinc-400 border-zinc-800"
-                        }`}>
-                          {template.priceTier}
-                        </span>
+                        {!(template.categories?.includes("Banners") || template.category === "Banners" || template.categories?.includes("photos") || template.category === "photos") ? null : (
+                          <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded border uppercase ${
+                            template.priceTier === "Signature" 
+                              ? "bg-violet-500/10 text-violet-400 border-violet-500/30" 
+                              : template.priceTier === "Premium" 
+                              ? "bg-zinc-800 text-zinc-350 border-zinc-750"
+                              : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                          }`}>
+                            {template.priceTier}
+                          </span>
+                        )}
                       </div>
 
                       <p className="text-zinc-400 text-xs line-clamp-2 leading-relaxed mb-4">
@@ -971,19 +1227,23 @@ export default function App() {
                       </div>
 
                       <div className="flex justify-between items-center text-[11px] text-zinc-400 font-medium">
-                        <div className="flex items-center gap-1.5">
-                          <Palette size={12} className="text-violet-400" />
-                          <div className="flex gap-1">
-                            {template.specs.colorPalette.map((col, idx) => (
-                              <span 
-                                key={idx} 
-                                className="w-2.5 h-2.5 rounded-full border border-zinc-800 shadow-sm block" 
-                                style={{ backgroundColor: col }}
-                                title={col}
-                              />
-                            ))}
+                        {(template.categories?.includes("Banners") || template.category === "Banners" || template.categories?.includes("photos") || template.category === "photos") && template.specs.colorPalette && template.specs.colorPalette.length > 0 ? (
+                          <div className="flex items-center gap-1.5">
+                            <Palette size={12} className="text-violet-400" />
+                            <div className="flex gap-1">
+                              {template.specs.colorPalette.map((col, idx) => (
+                                <span 
+                                  key={idx} 
+                                  className="w-2.5 h-2.5 rounded-full border border-zinc-800 shadow-sm block" 
+                                  style={{ backgroundColor: col }}
+                                  title={col}
+                                />
+                              ))}
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div />
+                        )}
 
                         {/* Creator-only Edit & Delete actions */}
                         {isCreatorMode && (
@@ -1053,10 +1313,10 @@ export default function App() {
             </div>
 
             <div className="mt-8 pt-6 border-t border-zinc-800 text-xs text-zinc-400">
-              <p className="font-medium text-zinc-200 mb-1">Lumina Studios Location</p>
+              <p className="font-medium text-zinc-200 mb-1">Teja Studios Location</p>
               <div className="flex items-center gap-1.5 mb-1 text-zinc-400">
                 <MapPin size={12} className="text-violet-400 shrink-0" />
-                <span>Madison Avenue, Suite 14B, New York, NY 10016</span>
+                <span>Chevella, Hyderabad, Telangana, 501503</span>
               </div>
             </div>
           </div>
@@ -1163,14 +1423,29 @@ export default function App() {
                 <div className="flex-grow flex items-center justify-center">
                   {/* Aspect Ratio Box Wrapper for Player */}
                   <div className={`w-full ${selectedTemplate.ratio === "9:16" ? "max-w-[310px] aspect-[9/16]" : "aspect-video"} rounded-xl overflow-hidden shadow-2xl relative`}>
-                    <VideoPlayer 
-                      url={selectedTemplate.videoUrl} 
-                      autoplay={true}
-                      muted={false}
-                      controls={true}
-                      loop={true}
-                      className="w-full h-full object-cover"
-                    />
+                    {selectedTemplate.category === "Banners" || selectedTemplate.category === "photos" ? (
+                      <img 
+                        src={getImageUrl(selectedTemplate.videoUrl)} 
+                        alt={selectedTemplate.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-contain bg-zinc-950"
+                        onError={(e) => {
+                          const backup = getBackupImageUrl(selectedTemplate.videoUrl);
+                          if (backup && e.currentTarget.src !== backup) {
+                            e.currentTarget.src = backup;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <VideoPlayer 
+                        url={selectedTemplate.videoUrl} 
+                        autoplay={true}
+                        muted={false}
+                        controls={true}
+                        loop={true}
+                        className="w-full h-full object-cover"
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -1213,40 +1488,65 @@ export default function App() {
                     </h4>
                     
                     <div className="grid grid-cols-2 gap-x-4 gap-y-3.5 text-xs text-zinc-300">
-                      <div>
-                        <span className="text-zinc-500 block text-[10px]">Duration:</span>
-                        <span className="font-semibold text-white">{selectedTemplate.duration}</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block text-[10px]">Price Tier:</span>
-                        <span className="font-semibold text-violet-400">{selectedTemplate.priceTier}</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block text-[10px]">Photo Slides Slots:</span>
-                        <span className="font-semibold text-white">{selectedTemplate.specs.photoSlides} slides</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-500 block text-[10px]">Turnaround Delivery:</span>
-                        <span className="font-semibold text-white">{selectedTemplate.specs.turnaround}</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-zinc-500 block text-[10px] mb-1">Recommended Vibe Palette:</span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {selectedTemplate.specs.colorPalette.map((col, idx) => (
-                            <div key={idx} className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 py-0.5 px-2 rounded-full">
-                              <span 
-                                className="w-2.5 h-2.5 rounded-full border border-zinc-750 block" 
-                                style={{ backgroundColor: col }}
-                              />
-                              <span className="font-mono text-[9px] text-zinc-400 uppercase">{col}</span>
+                      {(() => {
+                        const isVideo = !(selectedTemplate.categories?.includes("Banners") || selectedTemplate.category === "Banners" || selectedTemplate.categories?.includes("photos") || selectedTemplate.category === "photos");
+                        return (
+                          <>
+                            <div>
+                              <span className="text-zinc-500 block text-[10px]">Duration:</span>
+                              <span className="font-semibold text-white">{selectedTemplate.duration}</span>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-zinc-500 block text-[10px]">Soundtrack Style:</span>
-                        <span className="font-semibold text-zinc-300 italic text-[13px] block mt-0.5">&ldquo;{selectedTemplate.specs.musicStyle}&rdquo;</span>
-                      </div>
+                            {!isVideo && (
+                              <div>
+                                <span className="text-zinc-500 block text-[10px]">Price Tier:</span>
+                                <span className="font-semibold text-violet-400">{selectedTemplate.priceTier}</span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-zinc-500 block text-[10px]">Photo Slides Slots:</span>
+                              <span className="font-semibold text-white">{selectedTemplate.specs.photoSlides} slides</span>
+                            </div>
+                            <div>
+                              <span className="text-zinc-500 block text-[10px]">Turnaround Delivery:</span>
+                              <span className="font-semibold text-white">{selectedTemplate.specs.turnaround}</span>
+                            </div>
+                            {selectedTemplate.specs.detailsNeeded && selectedTemplate.specs.detailsNeeded.length > 0 && (
+                              <div className="col-span-2 border-t border-zinc-800/80 pt-2.5">
+                                <span className="text-zinc-500 block text-[10px] mb-1.5">Required Event Details:</span>
+                                <div className="flex flex-wrap gap-1">
+                                  {selectedTemplate.specs.detailsNeeded.map((det, idx) => (
+                                    <span key={idx} className="bg-zinc-900 border border-zinc-800 text-zinc-300 px-2 py-0.5 rounded-md text-[10px] font-medium">
+                                      {det}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {!isVideo && selectedTemplate.specs.colorPalette && selectedTemplate.specs.colorPalette.length > 0 && (
+                              <div className="col-span-2">
+                                <span className="text-zinc-500 block text-[10px] mb-1">Recommended Vibe Palette:</span>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {selectedTemplate.specs.colorPalette.map((col, idx) => (
+                                    <div key={idx} className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 py-0.5 px-2 rounded-full">
+                                      <span 
+                                        className="w-2.5 h-2.5 rounded-full border border-zinc-750 block" 
+                                        style={{ backgroundColor: col }}
+                                      />
+                                      <span className="font-mono text-[9px] text-zinc-400 uppercase">{col}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {!isVideo && selectedTemplate.specs.musicStyle && (
+                              <div className="col-span-2">
+                                <span className="text-zinc-500 block text-[10px]">Soundtrack Style:</span>
+                                <span className="font-semibold text-zinc-300 italic text-[13px] block mt-0.5">&ldquo;{selectedTemplate.specs.musicStyle}&rdquo;</span>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -1274,27 +1574,101 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Interactive Details Input Section */}
+                  {selectedTemplate.specs.detailsNeeded && selectedTemplate.specs.detailsNeeded.length > 0 && (
+                    <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-2xl p-5 mb-4 animate-fade-in">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Sparkles size={14} className="text-violet-400" />
+                        <h4 className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+                          Fill Customization Details (Optional)
+                        </h4>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        {selectedTemplate.specs.detailsNeeded.map((field) => (
+                          <div key={field}>
+                            <label className="block text-[10px] text-zinc-400 font-semibold mb-1 uppercase tracking-wider">
+                              {field}
+                            </label>
+                            <input
+                              type="text"
+                              placeholder={`Enter ${field.toLowerCase()}...`}
+                              value={clientCustomDetails[field] || ""}
+                              onChange={(e) => {
+                                setClientCustomDetails(prev => ({
+                                  ...prev,
+                                  [field]: e.target.value
+                                }));
+                              }}
+                              className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-zinc-500 mt-2.5 italic">
+                        * Values typed here will instantly pre-fill your order message on WhatsApp/Email!
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Direct Action Link */}
-                <div className="border-t border-zinc-800 pt-5 mt-4 grid grid-cols-2 gap-3">
-                  <a
-                    href={`https://wa.me/918520884267?text=Hello%20Teja%20Studios%2C%20I%2520am%2520interested%2520in%252520ordering%2520the%2520"${encodeURIComponent(selectedTemplate.title)}"%2520video%2520invitation%2520template%2521`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <MessageSquare size={14} className="fill-white/10" />
-                    <span>Order via WhatsApp</span>
-                  </a>
-                  <a
-                    href={`mailto:tejaarts09@gmail.com?subject=Video%20Invitation%20Order:%20${encodeURIComponent(selectedTemplate.title)}&body=Hello%20Teja%20Studios%2C%0D%0A%0D%0AI%2520am%2520interested%2520in%252520ordering%2520your%2520"${encodeURIComponent(selectedTemplate.title)}"%2520video%2520invitation%2520template.%2520Please%2520let%2520me%2520know%2520the%2520next%2520steps.%0D%0A%0D%0AThank%2520you!`}
-                    className="py-3 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold tracking-wide transition border border-zinc-700 shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Mail size={14} />
-                    <span>Order via Email</span>
-                  </a>
-                </div>
+                {(() => {
+                  const getWhatsAppUrl = () => {
+                    let text = `Hello Teja Studios, I am interested in ordering the "${selectedTemplate.title}" video invitation template!\n\n`;
+                    const fields = selectedTemplate.specs.detailsNeeded || [];
+                    const filledFields = fields.filter(f => clientCustomDetails[f]?.trim());
+                    
+                    if (filledFields.length > 0) {
+                      text += `Here are my customization details:\n`;
+                      fields.forEach(f => {
+                        const val = clientCustomDetails[f]?.trim() || "Not provided yet";
+                        text += `- ${f}: ${val}\n`;
+                      });
+                    }
+                    return `https://wa.me/918520884267?text=${encodeURIComponent(text)}`;
+                  };
+
+                  const getEmailUrl = () => {
+                    const subject = `Video Invitation Order: ${selectedTemplate.title}`;
+                    let body = `Hello Teja Studios,\n\nI am interested in ordering your "${selectedTemplate.title}" video invitation template.\n\n`;
+                    const fields = selectedTemplate.specs.detailsNeeded || [];
+                    const filledFields = fields.filter(f => clientCustomDetails[f]?.trim());
+                    
+                    if (filledFields.length > 0) {
+                      body += `Here are my customization details:\n`;
+                      fields.forEach(f => {
+                        const val = clientCustomDetails[f]?.trim() || "Not provided yet";
+                        body += `- ${f}: ${val}\n`;
+                      });
+                      body += `\n`;
+                    }
+                    body += `Please let me know the next steps.\n\nThank you!`;
+                    return `mailto:tejaarts09@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                  };
+
+                  return (
+                    <div className="border-t border-zinc-800 pt-5 mt-4 grid grid-cols-2 gap-3">
+                      <a
+                        href={getWhatsAppUrl()}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <MessageSquare size={14} className="fill-white/10" />
+                        <span>Order via WhatsApp</span>
+                      </a>
+                      <a
+                        href={getEmailUrl()}
+                        className="py-3 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold tracking-wide transition border border-zinc-700 shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Mail size={14} />
+                        <span>Order via Email</span>
+                      </a>
+                    </div>
+                  );
+                })()}
               </div>
 
             </motion.div>
@@ -1410,6 +1784,187 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* SYNCHRONIZATION / CODE EXPORT MODAL */}
+      <AnimatePresence>
+        {isExportModalOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-zinc-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto"
+            onClick={() => setIsExportModalOpen(false)}
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-zinc-900 rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl border border-zinc-800 text-zinc-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-start gap-4 mb-4">
+                <div>
+                  <div className="flex items-center gap-2 text-emerald-400">
+                    <Send size={18} />
+                    <h3 className="text-lg font-bold text-white">Save Changes Permanently</h3>
+                  </div>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Export your custom templates and make them visible to visitors on your live website.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsExportModalOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Informative Help Box */}
+              <div className="bg-zinc-950/60 rounded-xl p-4 border border-zinc-800/80 mb-5 text-xs text-zinc-300 space-y-2.5 text-left">
+                <p className="font-semibold text-amber-400 flex items-center gap-1">
+                  💡 How static persistence works:
+                </p>
+                <p className="leading-relaxed text-zinc-400">
+                  Because this website runs directly inside your browser without a custom SQL database, any template modifications, new additions, or deletions are temporarily stored inside your computer's local browser memory (<code className="bg-zinc-900 px-1 py-0.5 rounded text-[11px] text-violet-400 font-mono">localStorage</code>).
+                </p>
+                <div className="pt-2 border-t border-zinc-850 space-y-2">
+                  <p className="font-semibold text-zinc-200">To make these updates permanent for everyone online:</p>
+                  <ol className="list-decimal pl-4 space-y-1 text-zinc-400">
+                    <li>Click the <span className="text-emerald-400 font-bold">"Copy Updated Code"</span> button below.</li>
+                    <li>Paste the code into <code className="bg-zinc-900 px-1 py-0.5 rounded text-[11px] text-violet-400 font-mono">src/data.ts</code> file in the developer workbench to rewrite the database file, or copy-paste it into the AI Chat, and I will update it for you!</li>
+                    <li>Re-deploy to GitHub Pages or Cloud Run. Done!</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Textarea containing generated code */}
+              <div className="relative mb-5 text-left">
+                <textarea
+                  id="export-code-textarea"
+                  readOnly
+                  rows={8}
+                  value={`import { VideoTemplate } from "./types";\n\nexport const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, null, 2)};\n`}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-[11px] text-zinc-300 font-mono outline-none focus:border-zinc-700 resize-none"
+                />
+                <span className="absolute bottom-2.5 right-2.5 text-[9px] font-mono text-zinc-600 bg-zinc-900/80 px-2 py-1 rounded">
+                  {templates.length} templates
+                </span>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handleCopyExportCode}
+                  className={`w-1/2 py-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+                    copiedCode 
+                      ? "bg-emerald-600 text-white shadow-lg animate-pulse" 
+                      : "accent-gradient text-white hover:opacity-95"
+                  }`}
+                >
+                  <CheckCircle size={15} className={copiedCode ? "block" : "hidden"} />
+                  <span>{copiedCode ? "Code Copied!" : "📋 Copy Updated Code"}</span>
+                </button>
+                <button
+                  onClick={() => setIsExportModalOpen(false)}
+                  className="w-1/2 py-3 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+ 
+      {/* CUSTOM CONFIRMATION MODAL - TEMPLATE DELETE */}
+      <AnimatePresence>
+        {templateToDeleteId && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-zinc-950/95 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-zinc-900 rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-zinc-800 text-center"
+            >
+              <div className="w-12 h-12 bg-rose-500/10 text-rose-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
+                <Trash size={22} />
+              </div>
+
+              <h3 className="text-lg font-bold text-white mb-1">Delete Template?</h3>
+              <p className="text-zinc-400 text-xs mb-6">
+                Are you sure you want to delete this video invitation template from your portfolio? This action cannot be undone.
+              </p>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setTemplateToDeleteId(null)}
+                  className="w-1/2 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteTemplate}
+                  className="w-1/2 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Confirm Delete
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* CUSTOM CONFIRMATION MODAL - INQUIRY DELETE */}
+      <AnimatePresence>
+        {inquiryToDeleteId && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-zinc-950/95 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-zinc-900 rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-zinc-800 text-center"
+            >
+              <div className="w-12 h-12 bg-rose-500/10 text-rose-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
+                <Trash size={22} />
+              </div>
+
+              <h3 className="text-lg font-bold text-white mb-1">Delete Inquiry Log?</h3>
+              <p className="text-zinc-400 text-xs mb-6">
+                Are you sure you want to remove this client booking inquiry from your list? This action cannot be undone.
+              </p>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setInquiryToDeleteId(null)}
+                  className="w-1/2 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteInquiry}
+                  className="w-1/2 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Confirm Delete
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}

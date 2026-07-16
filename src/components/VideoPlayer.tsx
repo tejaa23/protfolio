@@ -14,16 +14,18 @@ interface VideoPlayerProps {
 export function parseVideoUrl(url: string): {
   type: "mp4" | "youtube" | "vimeo" | "drive";
   srcUrl: string;
+  driveId?: string;
 } {
   if (!url) return { type: "mp4", srcUrl: "" };
 
-  // Google Drive detection & conversion to embed preview
+  // Google Drive detection & conversion to direct streaming download URL
   const driveRegex = /(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/file\/d\/)([^/?#&\s]+)/;
   const driveMatch = url.match(driveRegex);
   if (driveMatch && driveMatch[1]) {
     return {
-      type: "drive",
-      srcUrl: `https://drive.google.com/file/d/${driveMatch[1]}/preview`
+      type: "mp4", // Map to native HTML5 video player for higher quality and custom UI controls
+      srcUrl: `https://docs.google.com/uc?export=download&id=${driveMatch[1]}`,
+      driveId: driveMatch[1]
     };
   }
 
@@ -60,14 +62,18 @@ export default function VideoPlayer({
   className = "",
   poster = ""
 }: VideoPlayerProps) {
-  const { type, srcUrl } = parseVideoUrl(url);
+  const parsed = parseVideoUrl(url);
+  const [playerType, setPlayerType] = useState(parsed.type);
+  const [playerSrc, setPlayerSrc] = useState(parsed.srcUrl);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const [isMuted, setIsMuted] = useState(muted);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    // Reset error when URL changes
+    const updated = parseVideoUrl(url);
+    setPlayerType(updated.type);
+    setPlayerSrc(updated.srcUrl);
     setHasError(false);
   }, [url]);
 
@@ -103,6 +109,16 @@ export default function VideoPlayer({
     }
   };
 
+  const handleVideoError = () => {
+    if (parsed.driveId) {
+      // Direct stream error (e.g. cookie block), fall back to embed preview
+      setPlayerType("drive");
+      setPlayerSrc(`https://drive.google.com/file/d/${parsed.driveId}/preview`);
+    } else {
+      setHasError(true);
+    }
+  };
+
   if (hasError) {
     return (
       <div className={`flex flex-col items-center justify-center bg-slate-900 text-slate-300 p-6 rounded-xl text-center ${className}`}>
@@ -112,11 +128,11 @@ export default function VideoPlayer({
     );
   }
 
-  if (type === "youtube" || type === "vimeo" || type === "drive") {
+  if (playerType === "youtube" || playerType === "vimeo" || playerType === "drive") {
     return (
       <div className={`relative overflow-hidden rounded-xl bg-black aspect-video ${className}`}>
         <iframe
-          src={srcUrl}
+          src={playerSrc}
           title="Invitation Video Player"
           className="absolute inset-0 w-full h-full border-0"
           allow="autoplay; fullscreen; picture-in-picture"
@@ -131,14 +147,14 @@ export default function VideoPlayer({
     <div className={`relative group/player overflow-hidden bg-black rounded-xl ${className}`}>
       <video
         ref={videoRef}
-        src={srcUrl}
+        src={playerSrc}
         poster={poster}
         autoPlay={autoplay}
         muted={isMuted}
         loop={loop}
         playsInline
         onClick={handlePlayToggle}
-        onError={() => setHasError(true)}
+        onError={handleVideoError}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         className="w-full h-full object-cover cursor-pointer"

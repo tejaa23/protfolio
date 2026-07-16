@@ -2,6 +2,7 @@ export interface VideoTemplate {
   id: string;
   title: string;
   category: string;
+  categories: string[];
   videoUrl: string;
   thumbnailUrl?: string;
   description: string;
@@ -15,6 +16,7 @@ export interface VideoTemplate {
     photoSlides: number;
     turnaround: string;
     colorPalette: string[];
+    detailsNeeded?: string[];
   };
 }
 
@@ -33,10 +35,15 @@ export interface Inquiry {
 
 export const CATEGORIES = [
   "All",
-  "Wedding",
-  "Save the Date",
-  "Birthday",
-  "Anniversary",
-  "Baby Shower",
-  "Festival & Other"
+  "Wedding Invitations",
+  "Birthday Invitations",
+  "saree ceremony invitation",
+  "cradle ceremony invitation",
+  "All AI Invitations",
+  "AI Wedding Invitations",
+  "Wedding Voiceover Invitations",
+  "Special AI",
+  "other",
+  "Banners",
+  "photos"
 ] as const;
