@@ -10,6 +10,7 @@ export interface VideoTemplate {
   ratio: "9:16" | "16:9";
   priceTier: "Standard" | "Premium" | "Signature";
   tags: string[];
+  pinned?: boolean;
   specs: {
     resolution: string;
     musicStyle: string;

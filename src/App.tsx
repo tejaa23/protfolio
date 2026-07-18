@@ -5,7 +5,6 @@ import {
   Film, 
   Heart, 
   Calendar, 
-  Clock, 
   Maximize2, 
   Phone, 
   Mail, 
@@ -21,12 +20,14 @@ import {
   Tv, 
   Settings, 
   ExternalLink,
+  Share2,
   MessageSquare, 
   Send,
   PlusCircle,
   Video,
   FileText,
   Pencil,
+  Pin,
   Image as ImageIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -104,11 +105,13 @@ export default function App() {
   const [newTurnaround, setNewTurnaround] = useState("2 Business Days");
   const [newColorPalette, setNewColorPalette] = useState("#D4AF37,#0C2340,#FFFFFF");
   const [newDetailsNeeded, setNewDetailsNeeded] = useState("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
+  const [newPinned, setNewPinned] = useState(false);
   const [creatorError, setCreatorError] = useState("");
   const [creatorSuccess, setCreatorSuccess] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<VideoTemplate | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [shareLinkCopied, setShareLinkCopied] = useState<boolean>(false);
 
   const [templateToDeleteId, setTemplateToDeleteId] = useState<string | null>(null);
   const [inquiryToDeleteId, setInquiryToDeleteId] = useState<string | null>(null);
@@ -158,13 +161,30 @@ export default function App() {
           migrated = true;
         }
 
-        // Ensure all default templates from INITIAL_TEMPLATES are present in local storage list
+        // Ensure all default templates from INITIAL_TEMPLATES are present in local storage list (unless explicitly deleted by the user)
+        const deletedIdsStr = localStorage.getItem("deleted_default_template_ids");
+        const deletedIds = deletedIdsStr ? JSON.parse(deletedIdsStr) : [];
+        
         INITIAL_TEMPLATES.forEach(initialT => {
           const hasTemplate = parsed.some(t => t.id === initialT.id);
-          if (!hasTemplate) {
+          const wasDeleted = deletedIds.includes(initialT.id);
+          if (!hasTemplate && !wasDeleted) {
             parsed.push(initialT);
             migrated = true;
           }
+        });
+
+        // Keep default templates synchronized with their current definitions in INITIAL_TEMPLATES
+        parsed = parsed.map(t => {
+          const initialMatch = INITIAL_TEMPLATES.find(it => it.id === t.id);
+          if (initialMatch) {
+            const merged = { ...t, ...initialMatch };
+            if (JSON.stringify(t) !== JSON.stringify(merged)) {
+              migrated = true;
+              return merged;
+            }
+          }
+          return t;
         });
 
         // Clean up any old default templates that have been deleted from INITIAL_TEMPLATES in the code
@@ -213,6 +233,23 @@ export default function App() {
     setSearchQuery("");
   }, []);
 
+  // Auto-open template if passed in URL query parameter
+  useEffect(() => {
+    if (templates.length > 0) {
+      const params = new URLSearchParams(window.location.search);
+      const templateId = params.get("template") || params.get("v");
+      if (templateId) {
+        const found = templates.find(t => t.id === templateId);
+        if (found) {
+          setSelectedTemplate(found);
+          // Remove query params from url so they don't persist on subsequent reloads/navigation
+          const newUrl = window.location.pathname + window.location.hash;
+          window.history.replaceState({}, document.title, newUrl);
+        }
+      }
+    }
+  }, [templates]);
+
   // Sync templates to localStorage
   const saveTemplates = (newTemplates: VideoTemplate[]) => {
     setTemplates(newTemplates);
@@ -244,6 +281,7 @@ export default function App() {
     setNewTurnaround(template.specs.turnaround);
     setNewColorPalette(template.specs.colorPalette.join(","));
     setNewDetailsNeeded((template.specs.detailsNeeded || []).join(", "));
+    setNewPinned(template.pinned || false);
     setCreatorError("");
     setCreatorSuccess("");
 
@@ -271,6 +309,7 @@ export default function App() {
     setNewTurnaround("2 Business Days");
     setNewColorPalette("#D4AF37,#0C2340,#FFFFFF");
     setNewDetailsNeeded("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
+    setNewPinned(false);
     setCreatorError("");
     setCreatorSuccess("");
   };
@@ -325,6 +364,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
       ratio: newRatio,
       priceTier: isVideo ? "Standard" : newPriceTier,
       tags: newTags.split(",").map(t => t.trim()).filter(Boolean),
+      pinned: newPinned,
       specs: {
         resolution: newResolution,
         musicStyle: isVideo ? "" : newMusicStyle,
@@ -363,6 +403,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
     setNewTurnaround("2 Business Days");
     setNewColorPalette("#D4AF37,#0C2340,#FFFFFF");
     setNewDetailsNeeded("Bride Name, Groom Name, Wedding Date, Wedding Time, Venue Name & Address");
+    setNewPinned(false);
   };
 
   const handleDeleteTemplate = (id: string, e: MouseEvent) => {
@@ -373,12 +414,58 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
   const confirmDeleteTemplate = () => {
     if (templateToDeleteId) {
       const updated = templates.filter(t => t.id !== templateToDeleteId);
+      
+      // Track if it's a built-in default template being deleted
+      const isBuiltIn = INITIAL_TEMPLATES.some(t => t.id === templateToDeleteId);
+      if (isBuiltIn) {
+        try {
+          const deletedIdsStr = localStorage.getItem("deleted_default_template_ids");
+          const deletedIds = deletedIdsStr ? JSON.parse(deletedIdsStr) : [];
+          if (!deletedIds.includes(templateToDeleteId)) {
+            deletedIds.push(templateToDeleteId);
+            localStorage.setItem("deleted_default_template_ids", JSON.stringify(deletedIds));
+          }
+        } catch (e) {
+          console.error("Error saving deleted templates registry", e);
+        }
+      }
+
       saveTemplates(updated);
       if (editingTemplate?.id === templateToDeleteId) {
         handleCancelEdit();
       }
       setTemplateToDeleteId(null);
     }
+  };
+
+  const handleTogglePin = (id: string, e: MouseEvent) => {
+    e.stopPropagation();
+    const updated = templates.map(t => {
+      if (t.id === id) {
+        return { ...t, pinned: !t.pinned };
+      }
+      return t;
+    });
+    saveTemplates(updated);
+  };
+
+  const handleCopyShareLink = (templateId: string, e?: MouseEvent) => {
+    if (e) e.stopPropagation();
+    const shareUrl = `${window.location.origin}${window.location.pathname}?v=${templateId}`;
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => {
+        setShareLinkCopied(true);
+        setTimeout(() => setShareLinkCopied(false), 2000);
+      })
+      .catch((err) => {
+        console.error("Failed to copy link", err);
+      });
+  };
+
+  const getWhatsAppShareUrl = (template: VideoTemplate) => {
+    const shareUrl = `${window.location.origin}${window.location.pathname}?v=${template.id}`;
+    const text = `Check out this beautiful ${template.category.toLowerCase()} invitation template "${template.title}" on Teja Studios!\n\nView it here: ${shareUrl}`;
+    return `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
   };
 
   const handleInquirySubmit = (e: FormEvent) => {
@@ -500,6 +587,13 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
       t.tags.some(tag => tag.toLowerCase().includes(searchLower));
     
     return matchesCategory && matchesSearch;
+  }).sort((a, b) => {
+    const aPinned = a.pinned ? 1 : 0;
+    const bPinned = b.pinned ? 1 : 0;
+    if (aPinned !== bPinned) {
+      return bPinned - aPinned; // Pinned templates come first
+    }
+    return 0; // Preserve default ordering otherwise
   });
 
   return (
@@ -725,6 +819,21 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                       <option value="9:16">Vertical (9:16)</option>
                       <option value="16:9">Widescreen (16:9)</option>
                     </select>
+
+                    <div className="mt-3.5">
+                      <label className="flex items-center gap-2 text-zinc-300 hover:text-white text-xs cursor-pointer select-none bg-zinc-900/40 p-2.5 border border-zinc-800 rounded-lg hover:border-violet-500/30 transition">
+                        <input
+                          type="checkbox"
+                          checked={newPinned}
+                          onChange={(e) => setNewPinned(e.target.checked)}
+                          className="rounded border-zinc-750 bg-zinc-950 text-violet-500 focus:ring-violet-500 h-4 w-4 cursor-pointer"
+                        />
+                        <div>
+                          <span className="font-semibold text-white block">Pin to Top / Feature</span>
+                          <span className="text-[10px] text-zinc-500">Show this sample firstly in the app</span>
+                        </div>
+                      </label>
+                    </div>
                   </div>
                 </div>
 
@@ -755,17 +864,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                     const formIsVideo = !newCategories.includes("Banners") && !newCategories.includes("photos");
                     return (
                       <>
-                        <div className={`grid ${formIsVideo ? "grid-cols-2" : "grid-cols-3"} gap-2`}>
-                          <div>
-                            <label className="block text-zinc-300 font-semibold mb-1">Duration</label>
-                            <input
-                              type="text"
-                              placeholder="30s"
-                              value={newDuration}
-                              onChange={(e) => setNewDuration(e.target.value)}
-                              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-white focus:outline-none focus:border-violet-500"
-                            />
-                          </div>
+                        <div className={`grid ${formIsVideo ? "grid-cols-1" : "grid-cols-2"} gap-2`}>
                           {!formIsVideo && (
                             <div>
                               <label className="block text-zinc-300 font-semibold mb-1">Price Tier</label>
@@ -1192,16 +1291,18 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                       {template.ratio} Format
                     </span>
 
+                    {/* Pin Indicator Tag */}
+                    {template.pinned && (
+                      <span className="absolute top-3 left-[118px] bg-amber-500 text-zinc-950 text-[9px] font-extrabold tracking-widest px-2 py-1 rounded-full border border-amber-450/40 z-20 flex items-center gap-0.5 uppercase shadow-md shadow-amber-500/20">
+                        <Pin size={8} className="fill-zinc-950 rotate-45" />
+                        <span>Featured</span>
+                      </span>
+                    )}
+
                     {/* Category Label */}
                     <span className="absolute top-3 right-3 bg-violet-600 text-white text-[10px] font-bold tracking-widest px-2.5 py-1 rounded-full z-20 uppercase">
                       {template.category}
                     </span>
-
-                    {/* Duration / Clock indicator */}
-                    <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-zinc-950/80 backdrop-blur-md text-zinc-200 text-[10px] font-medium px-2 py-0.5 rounded-md z-20">
-                      <Clock size={10} className="text-violet-400" />
-                      <span>{template.duration}</span>
-                    </div>
                   </div>
 
                   {/* Card Info Details */}
@@ -1262,6 +1363,17 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                         {/* Creator-only Edit & Delete actions */}
                         {isCreatorMode && (
                           <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={(e) => handleTogglePin(template.id, e)}
+                              className={`transition p-1 hover:bg-zinc-850 rounded-md ${
+                                template.pinned 
+                                  ? "text-amber-400 hover:text-amber-300" 
+                                  : "text-zinc-500 hover:text-zinc-400"
+                              }`}
+                              title={template.pinned ? "Unpin/Unfeature template" : "Pin/Feature to Top"}
+                            >
+                              <Pin size={13} className={template.pinned ? "fill-amber-400 rotate-45" : "rotate-0"} />
+                            </button>
                             <button
                               onClick={(e) => handleEditTemplate(template, e)}
                               className="text-violet-400 hover:text-violet-300 transition p-1 hover:bg-zinc-800 rounded-md"
@@ -1420,7 +1532,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 15 }}
               transition={{ type: "spring", damping: 25, stiffness: 350 }}
-              className="bg-zinc-900 rounded-3xl overflow-hidden max-w-5xl w-full max-h-[90vh] lg:max-h-[85vh] shadow-2xl border border-zinc-800 grid grid-cols-1 md:grid-cols-12 text-zinc-200"
+              className="bg-zinc-900 rounded-3xl overflow-y-auto md:overflow-hidden max-w-5xl w-full max-h-[90vh] lg:max-h-[85vh] shadow-2xl border border-zinc-800 grid grid-cols-1 md:grid-cols-12 text-zinc-200"
               onClick={(e) => e.stopPropagation()}
             >
               
@@ -1484,7 +1596,7 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
               </div>
 
               {/* SPECIFICATIONS & ACTION COLUMN (Right/Bottom) */}
-              <div className="md:col-span-6 p-6 sm:p-8 overflow-y-auto flex flex-col justify-between max-h-[50vh] md:max-h-[90vh] lg:max-h-[85vh] border-l border-zinc-800/80">
+              <div className="md:col-span-6 p-6 sm:p-8 md:overflow-y-auto flex flex-col justify-between md:max-h-[90vh] lg:max-h-[85vh] border-t md:border-t-0 md:border-l border-zinc-800/80">
                 <div>
                   <div className="flex justify-between items-start gap-4 mb-2">
                     <div>
@@ -1520,10 +1632,6 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                         const isVideo = !(selectedTemplate.categories?.includes("Banners") || selectedTemplate.category === "Banners" || selectedTemplate.categories?.includes("photos") || selectedTemplate.category === "photos");
                         return (
                           <>
-                            <div>
-                              <span className="text-zinc-500 block text-[10px]">Duration:</span>
-                              <span className="font-semibold text-white">{selectedTemplate.duration}</span>
-                            </div>
                             {!isVideo && (
                               <div>
                                 <span className="text-zinc-500 block text-[10px]">Price Tier:</span>
@@ -1677,23 +1785,65 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = ${JSON.stringify(templates, nu
                   };
 
                   return (
-                    <div className="border-t border-zinc-800 pt-5 mt-4 grid grid-cols-2 gap-3">
-                      <a
-                        href={getWhatsAppUrl()}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <MessageSquare size={14} className="fill-white/10" />
-                        <span>Order via WhatsApp</span>
-                      </a>
-                      <a
-                        href={getEmailUrl()}
-                        className="py-3 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold tracking-wide transition border border-zinc-700 shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Mail size={14} />
-                        <span>Order via Email</span>
-                      </a>
+                    <div className="border-t border-zinc-800 pt-5 mt-4 space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <a
+                          href={getWhatsAppUrl()}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <MessageSquare size={14} className="fill-white/10" />
+                          <span>Order via WhatsApp</span>
+                        </a>
+                        <a
+                          href={getEmailUrl()}
+                          className="py-3 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold tracking-wide transition border border-zinc-700 shadow-sm text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Mail size={14} />
+                          <span>Order via Email</span>
+                        </a>
+                      </div>
+
+                      {/* DIRECT SHARE TO WHATSAPP / COPY LINK */}
+                      <div className="bg-zinc-950/60 border border-zinc-800 p-4 rounded-2xl">
+                        <div className="flex items-center gap-1.5 mb-2.5">
+                          <Share2 size={13} className="text-violet-400" />
+                          <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
+                            Direct Share Option
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <a
+                            href={getWhatsAppShareUrl(selectedTemplate)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="py-2.5 px-3 bg-zinc-900 hover:bg-zinc-850 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/40 rounded-xl text-xs font-bold tracking-wide transition text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <MessageSquare size={13} className="fill-emerald-400/10 text-emerald-400" />
+                            <span>Share to WhatsApp</span>
+                          </a>
+                          <button
+                            onClick={(e) => handleCopyShareLink(selectedTemplate.id, e)}
+                            className="py-2.5 px-3 bg-zinc-900 hover:bg-zinc-850 text-zinc-300 border border-zinc-800 hover:border-zinc-750 rounded-xl text-xs font-bold tracking-wide transition text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {shareLinkCopied ? (
+                              <>
+                                <CheckCircle size={13} className="text-emerald-400 animate-pulse" />
+                                <span>Link Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Share2 size={13} />
+                                <span>Copy Share Link</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-2 text-center">
+                          Directly shares the link to this custom template page!
+                        </p>
+                      </div>
                     </div>
                   );
                 })()}
