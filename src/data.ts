@@ -456,5 +456,53 @@ export const INITIAL_TEMPLATES: VideoTemplate[] = [
       ]
     },
     "pinned": true
-  }
+  },
+  {
+  "id": "ai-temple-wedding-invitation",
+  "title": "Divine Temple AI Wedding Invitation",
+  "category": "Wedding Invitations",
+  "categories": [
+    "Wedding Invitations",
+    "AI Wedding Invitations",
+    "Special AI"
+  ],
+  "videoUrl": "https://drive.google.com/file/d/1opetnyWTfvgFJmycHCSmDvUOg_rQok66/view?usp=drive_link",
+  "description": "A cinematic South Indian temple-themed AI wedding invitation featuring majestic temple architecture, traditional floral decorations, sacred wedding rituals, personalized bride and groom introductions, and elegant cultural storytelling. Perfect for couples seeking a divine and luxurious wedding invitation experience.",
+  "duration": "70s",
+  "ratio": "16:9",
+  "priceTier": "Signature",
+  "tags": [
+    "Temple Wedding",
+    "South Indian Wedding",
+    "AI Invitation",
+    "Traditional Ceremony",
+    "Luxury Wedding",
+    "Special AI",
+    "Cinematic Storytelling",
+    "Cultural Heritage"
+  ],
+  "specs": {
+    "resolution": "1920x1080 (Full HD)",
+    "musicStyle": "Traditional South Indian Instrumental & Cinematic Orchestra",
+    "photoSlides": 0,
+    "turnaround": "4 hours",
+    "colorPalette": [
+      "#D4A55A",
+      "#8B5A2B",
+      "#F7E7CE"
+    ],
+    "detailsNeeded": [
+      "Bride Name",
+      "Groom Name",
+      "Bride Parents Names",
+      "Groom Parents Names",
+      "Wedding Date",
+      "Muhurtham Time",
+      "Venue Details",
+      "Wedding Invitation Message"
+    ]
+  },
+  "pinned": true
+}
+  
 ];
